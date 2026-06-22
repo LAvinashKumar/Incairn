@@ -1137,7 +1137,14 @@ function renderCells(){{
       el.ondragstart=e=>{{G.drag={{t:'cell',idx:i}};e.dataTransfer.effectAllowed='move';}};
       const rm=document.createElement('button');rm.className='rm';rm.textContent='✕';
       rm.onclick=()=>rmCell(i); el.appendChild(rm);
-    }}else{{el.draggable=false;el.ondragstart=null;}}
+      // Touch listeners for mobile rearranging
+      el.ontouchstart=tS;
+      el.ontouchmove=tM;
+      el.ontouchend=tE;
+    }}else{{
+      el.draggable=false;el.ondragstart=null;
+      el.ontouchstart=null;el.ontouchmove=null;el.ontouchend=null;
+    }}
   }});
 }}
 function updateProg(){{
@@ -1408,23 +1415,95 @@ function launchConfetti(){{
 
 // ═══════════════════════════════════════════════════════
 // TOUCH DRAG
+// Handles three drag sources:
+//   tray chip  → empty or occupied cell  (place / swap-back + place)
+//   cell stone → other cell              (swap)
+//   cell stone → tray                   (return to tray)
 // ═══════════════════════════════════════════════════════
-let tCh=null,tCl=null;
-function tS(e){{const ch=e.currentTarget;if(ch.classList.contains('used'))return;
-  tCh=ch;const r=ch.getBoundingClientRect();tCl=ch.cloneNode(true);
+let tCh=null,tCl=null,tSrc=null; // tSrc: {{t:'tray',id}} or {{t:'cell',idx}}
+
+function tS(e){{
+  const ch=e.currentTarget;
+  // Tray chip: skip if already placed (hidden)
+  if(ch.classList.contains('used'))return;
+  tCh=ch;
+
+  // Determine source type
+  const parentCell=ch.closest('.cell');
+  if(parentCell){{
+    // Dragging a stone already placed in the pyramid
+    tSrc={{t:'cell',idx:parseInt(parentCell.dataset.i)}};
+  }}else{{
+    // Dragging from the tray
+    tSrc={{t:'tray',id:ch.id}};
+  }}
+
+  // Create floating ghost
+  const r=ch.getBoundingClientRect();
+  tCl=document.createElement('div');
   tCl.className='chip chip-ghost';
-  tCl.style.cssText+=`width:${{r.width}}px;height:${{r.height}}px;left:${{r.left}}px;top:${{r.top}}px`;
-  document.body.appendChild(tCl);}}
-function tM(e){{if(!tCl)return;e.preventDefault();const t=e.touches[0];
+  tCl.textContent=ch.textContent.replace('✕','').trim();
+  tCl.style.cssText=`width:${{r.width}}px;height:${{r.height}}px;`+
+    `left:${{r.left}}px;top:${{r.top}}px;position:fixed;display:flex;`+
+    `align-items:center;justify-content:center;font-family:'Georgia',serif;`+
+    `font-size:1rem;color:var(--cream);`;
+  document.body.appendChild(tCl);
+}}
+
+function tM(e){{
+  if(!tCl)return;e.preventDefault();const t=e.touches[0];
   tCl.style.left=(t.clientX-27)+'px';tCl.style.top=(t.clientY-27)+'px';
   document.querySelectorAll('.cell').forEach(c=>c.classList.remove('over'));
-  tCl.style.display='none';const el=document.elementFromPoint(t.clientX,t.clientY);tCl.style.display='';
-  const cell=el&&el.closest('.cell');if(cell)cell.classList.add('over');}}
-function tE(e){{if(!tCl||!tCh)return;const t=e.changedTouches[0];tCl.remove();tCl=null;
+  tCl.style.display='none';
+  const el=document.elementFromPoint(t.clientX,t.clientY);
+  tCl.style.display='';
+  const cell=el&&el.closest('.cell');
+  if(cell)cell.classList.add('over');
+}}
+
+function tE(e){{
+  if(!tCl||!tCh)return;
+  const t=e.changedTouches[0];
+  tCl.remove();tCl=null;
   document.querySelectorAll('.cell').forEach(c=>c.classList.remove('over'));
-  const el=document.elementFromPoint(t.clientX,t.clientY);const cell=el&&el.closest('.cell');
-  if(cell){{const i=parseInt(cell.dataset.i),id=tCh.id,v=G.CS[id].v;
-    if(G.C[i]!==null)ret(i);place(id,v,i,true);clrV();}}tCh=null;}}
+
+  const el=document.elementFromPoint(t.clientX,t.clientY);
+  const targetCell=el&&el.closest('.cell');
+  const onTray=el&&el.closest('#tray');
+
+  if(tSrc.t==='tray'){{
+    // ── Tray chip dropped onto a pyramid cell ──
+    if(targetCell){{
+      const ti=parseInt(targetCell.dataset.i);
+      if(G.C[ti]!==null)ret(ti);          // bump existing stone back to tray
+      place(tSrc.id,G.CS[tSrc.id].v,ti,true);
+      clrV();
+    }}
+    // Drop back on tray or elsewhere → no-op (stays in tray)
+  }}else{{
+    // ── Cell stone dragged somewhere ──
+    const srcIdx=tSrc.idx;
+    if(targetCell){{
+      const ti=parseInt(targetCell.dataset.i);
+      if(ti!==srcIdx){{
+        // Swap the two cells (mirrors desktop ondrop cell→cell logic)
+        const tmpV=G.C[ti],tmpId=G.CID[ti];
+        G.C[ti]=G.C[srcIdx];   G.CID[ti]=G.CID[srcIdx];
+        G.C[srcIdx]=tmpV;       G.CID[srcIdx]=tmpId;
+        G.moves++;
+        document.getElementById('g-mvc').textContent=G.moves;
+        renderCells(); updateProg(); clrV();
+      }}
+    }}else if(onTray){{
+      // Dropped back on the tray → return stone
+      ret(srcIdx); clrV();
+    }}
+    // Drop anywhere else → return stone to tray
+    else{{ret(srcIdx);clrV();}}
+  }}
+
+  tCh=null;tSrc=null;
+}}
 
 // ═══════════════════════════════════════════════════════
 // BOOT
