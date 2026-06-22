@@ -1,122 +1,208 @@
-# Incairn · Daily Cairn Puzzle
+# Incairn — A Daily Numerical Logic Puzzle
 
-A daily number-pyramid puzzle game built with Streamlit. Every day a new board is generated — ten numbered stones that must be arranged into a four-row pyramid. The twist: every parent stone is derived from its two children using a hidden arithmetic rule. Find the rule, fill the cairn.
+Incairn is a daily puzzle game built around pattern recognition, logical deduction, and hidden arithmetic relationships.
 
----
+Players are given ten numbered stones and an empty four-level pyramid. Their challenge is to arrange every stone correctly by discovering the hidden mathematical rule that connects each parent stone to the two stones beneath it.
 
-## How to Play
-
-1. Open the game and click **Play Today's Cairn** for the daily puzzle, or choose **Practice** to pick a difficulty.
-2. Ten numbered stones appear in a tray at the bottom of the screen.
-3. Drag each stone into the pyramid until all ten slots are filled.
-4. Press **Check the Cairn** to verify your arrangement.
-5. If you're stuck, use a **Hint** (you get three per game).
-6. Once the cairn is complete, the hidden rule is revealed on the win screen.
+Unlike traditional arithmetic puzzles, Incairn does not reveal the rule. Success comes from identifying patterns, testing hypotheses, and uncovering the logic that governs the entire structure.
 
 ---
 
-## Difficulty Levels
+## Core Gameplay
 
-| Level  | Rule Type              | Boards |
-|--------|------------------------|--------|
-| Easy   | Addition variants      | 10     |
-| Medium | Multiplication variants| 10     |
-| Hard   | Complex multiplication | 5      |
+Every puzzle consists of:
 
-Easy boards use rules like `parent = left + right`. Hard boards use rules like `parent = left × right − left`, which require more deductive thinking.
+* 10 numbered stones
+* A 4-level pyramid structure
+* One hidden arithmetic relationship
+* A single valid solution (plus its mirror equivalent)
+
+Players must:
+
+1. Analyze the available numbers.
+2. Infer the hidden arithmetic rule.
+3. Arrange all stones into the pyramid.
+4. Validate the completed structure.
+
+The challenge is not heavy calculation, but discovering the underlying relationship that makes the entire pyramid consistent.
 
 ---
 
-## Project Structure
+## Key Features
 
-```
+### Daily Puzzle Experience
+
+A new puzzle can be generated every day, encouraging repeat engagement and long-term retention.
+
+### Multiple Difficulty Levels
+
+**Easy**
+
+* Addition-based relationships
+* Clear and intuitive patterns
+* Designed for onboarding and quick wins
+
+**Medium**
+
+* Multiplication and hybrid arithmetic relationships
+* Requires experimentation and logical deduction
+
+**Hard**
+
+* Complex arithmetic relationships
+* Greater ambiguity and deeper reasoning
+* Designed for experienced puzzle players
+
+### Hint System
+
+Players can use limited hints when stuck, allowing progress without completely revealing the solution.
+
+### Feedback Collection
+
+Integrated feedback system allows collection of player observations, difficulty ratings, and gameplay impressions for continuous puzzle refinement.
+
+---
+
+## Product Design Goals
+
+Incairn was designed around three core principles:
+
+### Challenge Without Frustration
+
+The puzzle should not be immediately obvious, but it should never feel impossible.
+
+### Discovery-Driven Gameplay
+
+Players should experience moments of insight as they uncover the hidden rule.
+
+### Daily Replayability
+
+A successful puzzle should encourage players to return day after day while maintaining novelty and challenge.
+
+---
+
+## Technical Architecture
+
+```text
 Incairn/
-├── app.py                  # Streamlit app — full game UI (JS-driven, single component)
-├── generator.py            # Board generation pipeline (R1 rule framework)
-├── feedback.py             # Player feedback / notes system
-├── review.py               # Creator review tool (terminal, not for players)
-├── incairn_boards.json     # Pre-generated puzzle boards
-└── incairn_feedback.json   # Saved player feedback entries
+├── app.py
+├── generator.py
+├── feedback.py
+├── review.py
+├── incairn_boards.json
+└── incairn_feedback.json
 ```
 
-### File Overview
+### app.py
 
-**`app.py`** — The entire game UI lives in a single `components.html` call. Python injects board data and handles feedback saves; JavaScript controls all screen navigation (Home, Difficulty, Game, Win, History).
+Main Streamlit application containing the complete player experience, navigation flow, gameplay mechanics, and puzzle validation.
 
-**`generator.py`** — The R1 rule framework. Contains the rule registry across three tiers (easy, medium, hard), the pyramid builder, a safety filter (no duplicates, all values 1–98), a uniqueness/mirror solver, and the batch generator. Run directly to regenerate `incairn_boards.json`.
+### generator.py
 
-**`feedback.py`** — Isolated feedback module. Reads and writes `incairn_feedback.json`. Provides `add_note()`, `get_notes_for_board()`, and a `feedback_summary()` for review purposes.
+Board generation engine responsible for creating valid Incairn puzzles across multiple difficulty levels while maintaining puzzle quality constraints.
 
-**`review.py`** — A private terminal tool for the creator to walk through every board, verify triplets visually, and mark boards as OK, broken, or needing regeneration. Results are saved to `creator_review.json`.
+### feedback.py
+
+Feedback collection and storage system used for playtesting and puzzle evaluation.
+
+### review.py
+
+Internal review tool used to evaluate generated boards, identify weak puzzles, and refine generation logic.
+
+### incairn_boards.json
+
+Generated puzzle library used by the application.
+
+### incairn_feedback.json
+
+Stores player feedback and playtesting observations.
 
 ---
 
-## Setup
+## Board Generation Framework
 
-**Requirements:** Python 3.10+, Streamlit
+Incairn uses a rule-based generation framework.
 
-```bash
-pip install streamlit
-```
+Each puzzle is generated using a predefined arithmetic relationship.
 
-**Run the game:**
+Example rule families include:
 
-```bash
-streamlit run app.py
-```
+### Easy
 
-**Regenerate boards:**
+* x + y
+* x + y + 1
+* 2x + y
+* |x − y|
 
-```bash
-# Default: 10 Easy + 10 Medium + 5 Hard
-python generator.py
+### Medium
 
-# Single difficulty
-python generator.py --mode easy
-python generator.py --mode medium
-python generator.py --mode hard
+* x × y
+* x × y + 1
+* x × y + y
 
-# Show developer inspector after generation
-python generator.py --dev
-```
+### Hard
 
-**Run the creator review tool:**
+* x × y − x
+* x × y − y
+* x × y + x + y
 
-```bash
-python review.py              # interactive review of all boards
-python review.py --auto       # auto-walk, no prompts
-```
+The selected rule remains hidden from the player throughout gameplay.
 
 ---
 
-## Rule System (R1 Framework)
+## Generation Process
 
-Each board has a `generation` field that stores the rule ID used to build it (e.g. `R1_E01`, `R1_M03`, `R1_H02`). The rule ID is stored as developer metadata and is never shown to the player — the UI only says *"a hidden arithmetic rule connects every parent to its two children."*
+1. Select arithmetic rule.
+2. Generate a valid pyramid.
+3. Extract all 10 values.
+4. Shuffle values.
+5. Validate puzzle constraints.
+6. Verify solution uniqueness.
+7. Publish puzzle.
 
-| Prefix | Tier   | Example rules                     |
-|--------|--------|-----------------------------------|
-| R1_E   | Easy   | `x+y`, `x+y+1`, `2x+y`, `abs(x-y)` |
-| R1_M   | Medium | `x*y`, `x*y+1`, `x*y+y`          |
-| R1_H   | Hard   | `x*y−x`, `x*y−y`, `x*y+x+y`      |
+This approach ensures that every puzzle is solvable, logically consistent, and aligned with its intended difficulty level.
 
 ---
 
-## Board JSON Schema
+## Playtesting & Evaluation
 
-Each entry in `incairn_boards.json` follows this shape:
+To improve puzzle quality, generated boards are continuously evaluated through playtesting.
 
-```json
-{
-  "board_id":     "uuid",
-  "generated":    "ISO timestamp",
-  "generation":   "R1_E01",
-  "difficulty":   "Easy",
-  "relationship": "A hidden arithmetic rule...",
-  "solution":     [31, 19, 12, 11, 8, 4, 6, 5, 3, 1],
-  "puzzle":       [3, 6, 31, 19, 11, 4, 1, 5, 8, 12],
-  "board_number": 1
-}
-```
+Evaluation focuses on:
 
-`solution` is top-down: `[apex, L2-left, L2-right, L3-left, L3-mid, L3-right, base0, base1, base2, base3]`.  
-`puzzle` is the same ten values shuffled for the player tray.
+* Rule discoverability
+* Perceived difficulty
+* Completion time
+* Player satisfaction
+* Hint usage
+* Overall engagement
+
+The goal is to create puzzles that are challenging enough to be rewarding, but intuitive enough to remain enjoyable.
+
+---
+
+## Future Enhancements
+
+* Daily challenge system
+* Global leaderboard
+* User accounts and streak tracking
+* Advanced analytics dashboard
+* Community-created puzzles
+* Additional rule families
+* Adaptive difficulty generation
+
+---
+
+## Built With
+
+* Python
+* Streamlit
+* JSON-based board storage
+
+---
+
+## Vision
+
+Incairn aims to combine the accessibility of daily puzzle games like Wordle and Connections with the satisfaction of mathematical discovery.
+
+Every puzzle is designed to create a moment of insight—where a collection of disconnected numbers suddenly reveals a hidden structure.
