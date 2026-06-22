@@ -8,6 +8,9 @@ Python only injects board data and handles feedback saves.
 Run:  streamlit run app.py
 """
 import json, os, hashlib, random, time, base64
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent
 from datetime import date, datetime, timezone
 import streamlit as st
 import streamlit.components.v1 as components
@@ -36,11 +39,11 @@ st.markdown("""
 # ── Board data ────────────────────────────────────────────────
 @st.cache_data
 def load_boards():
-    with open("incairn_boards.json") as f:
+    with open(BASE_DIR / "incairn_boards.json") as f:
         return json.load(f)
 
 def save_feedback(entry):
-    path = "feedback.json"
+    path = BASE_DIR / "feedback.json"
     data = []
     if os.path.exists(path):
         with open(path) as f:
