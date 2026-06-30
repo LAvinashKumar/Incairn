@@ -66,12 +66,17 @@ daily_num = get_daily_num(boards)
 # Prepare slim board objects for JS injection
 def slim(b):
     num = b.get("board_number", 0)
+    # R2 boards use board_id as a readable slug (e.g. "R2-E01-0048")
+    # R1 boards use a UUID + a separate board_number field
+    bid = b["board_id"] if b["board_id"].startswith("R2-") else \
+          f"{b['difficulty'].lower()}-{str(num).zfill(2)}"
     return {
         "id":   b["board_id"],
         "num":  num,
-        "bid":  f"{b['difficulty'].lower()}-{str(num).zfill(2)}",
+        "bid":  bid,
         "diff": b["difficulty"],
-        "gen":  b["generation"],
+        "gen":  b.get("generation", ""),
+        "rel":  b.get("relationship", ""),
         "sol":  b["solution"],
         "puz":  b["puzzle"],
     }
@@ -956,6 +961,7 @@ const BOARDS     = {boards_js};
 const DAILY_NUM  = {daily_js};
 const TODAY_STR  = new Date().toISOString().split('T')[0];
 const RULE_NAMES = {{
+  // ── R1 (original boards) ────────────────────────────────
   Gen01_Add:'Left + Right', Gen02_Mul:'Left × Right', Gen03_AddPlus1:'Left + Right + 1',
   R1_E01:'Left + Right', R1_E02:'Left + Right + 1', R1_E03:'Left + Right − 1',
   R1_E04:'2 × Left + Right', R1_E05:'Left + 2 × Right',
@@ -963,9 +969,37 @@ const RULE_NAMES = {{
   R1_M01:'Left × Right', R1_M02:'Left × Right + 1', R1_M03:'Left × Right − 1',
   R1_M04:'Left × Right + Left', R1_M05:'Left × Right + Right',
   R1_H01:'Left × Right + Left + Right', R1_H02:'Left × Right − Left',
-  R1_H03:'Left × Right − Right', R1_H04:'Left × Right − (Left+Right)', R1_H05:'Left × Right + 2'
+  R1_H03:'Left × Right − Right', R1_H04:'Left × Right − (Left+Right)', R1_H05:'Left × Right + 2',
+  // ── R2 (new boards) ─────────────────────────────────────
+  R2_E01:'Left + Right + a',      // z=x+y+a
+  R2_E02:'2 × Left + Right',      // z=2x+y
+  R2_E03:'Left + 2 × Right',      // z=x+2y
+  R2_E04:'Left + Right − a',      // z=x+y-a
+  R2_E09:'Min(Left, Right)',       // z=min(x,y)
+  R2_E10:'Max(Left, Right)',       // z=max(x,y)
+  R2_M02:'Left × Right − a',      // z=x*y-a
+  R2_M04:'Left × Right − Left',   // z=x*y-x
+  R2_M06:'Left × Right − Right',  // z=x*y-y
+  R2_M07:'(Left + Right) / 2 + a',// z=(x+y)/2+a
+  R2_M08:'(Left + Right) / 2 − a',// z=(x+y)/2-a
+  R2_H04:'Left × Right − a',      // z=x*y-a
+  R2_H08:'(Left × Right) / 2',    // z=(x*y)/2
+  R2_H09:'(Left × Right) / 3',    // z=(x*y)/3
 }};
+
+// Rule functions — used by doCheck() to verify the cairn.
+// For R2 boards the relationship string (b.rel) is shown on the win screen
+// instead of deriving a human label, so the RF function just needs to
+// compute the correct value.  Where a rule has a parameter (a) we parse
+// it from the relationship string at board-load time (see parseA below).
+function parseA(rel) {{
+  // Extract the constant from strings like "z=x+y+3", "z=x*y-7", "z=(x+y)/2+8"
+  const m = rel.match(/[+\-](\d+)$/);
+  return m ? parseInt(m[1]) * (rel.includes('-') && rel.lastIndexOf('-') > rel.lastIndexOf('+') ? -1 : 1) : 0;
+}}
+
 const RF = {{
+  // ── R1 ──
   Gen01_Add:(a,b)=>a+b, Gen02_Mul:(a,b)=>a*b, Gen03_AddPlus1:(a,b)=>a+b+1,
   R1_E01:(a,b)=>a+b, R1_E02:(a,b)=>a+b+1, R1_E03:(a,b)=>a+b-1,
   R1_E04:(a,b)=>2*a+b, R1_E05:(a,b)=>a+2*b,
@@ -973,8 +1007,37 @@ const RF = {{
   R1_M01:(a,b)=>a*b, R1_M02:(a,b)=>a*b+1, R1_M03:(a,b)=>a*b-1,
   R1_M04:(a,b)=>a*b+a, R1_M05:(a,b)=>a*b+b,
   R1_H01:(a,b)=>a*b+a+b, R1_H02:(a,b)=>a*b-a, R1_H03:(a,b)=>a*b-b,
-  R1_H04:(a,b)=>a*b-(a+b), R1_H05:(a,b)=>a*b+2
+  R1_H04:(a,b)=>a*b-(a+b), R1_H05:(a,b)=>a*b+2,
+  // ── R2 — these are generated dynamically from the relationship string ──
+  // Stubs are replaced at game-start time by buildRF()
 }};
+
+// Build a live rule function from a relationship string like "z=x+y+3"
+function buildRF(rel) {{
+  const r = rel.replace(/\s/g,'').toLowerCase();
+  if(r==='z=x+y'||r==='z=y+x')   return (x,y)=>x+y;
+  if(r==='z=2x+y')                return (x,y)=>2*x+y;
+  if(r==='z=x+2y')                return (x,y)=>x+2*y;
+  if(r==='z=max(x,y)')            return (x,y)=>Math.max(x,y);
+  if(r==='z=min(x,y)')            return (x,y)=>Math.min(x,y);
+  if(r==='z=x*y')                 return (x,y)=>x*y;
+  if(r==='z=x*y-x')               return (x,y)=>x*y-x;
+  if(r==='z=x*y-y')               return (x,y)=>x*y-y;
+  // z=x+y+N  /  z=x+y-N
+  let m=r.match(/^z=x\+y([+\-]\d+)$/);
+  if(m) {{ const k=parseInt(m[1]); return (x,y)=>x+y+k; }}
+  // z=x*y+N  /  z=x*y-N
+  m=r.match(/^z=x\*y([+\-]\d+)$/);
+  if(m) {{ const k=parseInt(m[1]); return (x,y)=>x*y+k; }}
+  // z=(x+y)/2+N  /  z=(x+y)/2-N  /  z=(x+y)/2
+  m=r.match(/^z=\(x\+y\)\/2([+\-]\d+)?$/);
+  if(m) {{ const k=m[1]?parseInt(m[1]):0; return (x,y)=>(x+y)/2+k; }}
+  // z=(x*y)/2  /  z=(x*y)/3
+  m=r.match(/^z=\(x\*y\)\/(\d+)$/);
+  if(m) {{ const d=parseInt(m[1]); return (x,y)=>(x*y)/d; }}
+  // fallback: eval-based (safe — only board data)
+  return null;
+}}
 const TR=[[0,1,2],[1,3,4],[2,4,5],[3,6,7],[4,7,8],[5,8,9]];
 const ROWS=[[0],[1,2],[3,4,5],[6,7,8,9]];
 
@@ -1216,7 +1279,12 @@ function doCheck(){{
   if(G.solved)return;
   const vals=Array.from({{length:10}},(_,i)=>G.C[i]);
   if(vals.some(v=>v===null)){{showToast('Place all ten stones first','info');return;}}
-  const fn=RF[G.board.gen]; let ok=true;
+  // R2 boards: build rule fn from relationship string
+  const fn = G.board.gen.startsWith('R2_')
+    ? buildRF(G.board.rel)
+    : RF[G.board.gen];
+  if(!fn){{showToast('Unknown rule — cannot verify','err');return;}}
+  let ok=true;
   document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));
   let delay=0;
   TR.forEach(([p,l,r])=>{{
@@ -1249,7 +1317,9 @@ function showWin(){{
     const badge=document.getElementById('w-diff');
     badge.textContent=b.diff; badge.className='badge '+b.diff.toLowerCase();
     document.getElementById('w-rule').textContent=
-      'Parent = '+(RULE_NAMES[b.gen]||b.gen);
+      'Parent = '+(G.board.gen.startsWith('R2_')
+        ? G.board.rel                        // e.g. "z=x+y+3"
+        : (RULE_NAMES[G.board.gen]||G.board.gen));
     const st=JSON.parse(localStorage.getItem('incairn_stats')||'{{}}');
     document.getElementById('w-streak').textContent=
       (st.streak||0)>0?'🔥 '+st.streak+' day streak':'🔥 Keep going!';
