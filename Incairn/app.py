@@ -1071,12 +1071,6 @@ function _launchGame(data, mode) {{
 // ═══════════════════════════════════════════════════════
 function initTray(){{
   const tray=document.getElementById('tray'); tray.innerHTML='';
-  document.querySelectorAll('.cell').forEach(el=>{{
-    el.innerHTML='';
-    el.ondragover=e=>{{e.preventDefault();el.classList.add('over');}};
-    el.ondragleave=()=>el.classList.remove('over');
-    el.ondrop=onDrop;
-  }});
   G.board.puz.forEach((v,i)=>{{
     const id='p'+i; G.CS[id]={{v,placed:false}};
     const d=document.createElement('div');
@@ -1130,6 +1124,16 @@ function renderCells(){{
     const i=parseInt(el.dataset.i),v=G.C[i];
     const locked=G.lockedCells.has(i);
     el.textContent=''; el.classList.remove('full','ok','bad','hint','locked');
+
+    // Always wire drop targets — locked cells reject drops, others accept
+    if(locked){{
+      el.ondragover=null; el.ondragleave=null; el.ondrop=null;
+    }}else{{
+      el.ondragover=e=>{{e.preventDefault();el.classList.add('over');}};
+      el.ondragleave=()=>el.classList.remove('over');
+      el.ondrop=onDrop;
+    }}
+
     if(v!==null){{
       el.textContent=v; el.classList.add('full');
       if(locked){{
