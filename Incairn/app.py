@@ -1,19 +1,26 @@
 """
-app.py — Incairn  (Single-component full-page UI)
-===================================================
+app.py — Incairn  (Streamlit Frontend)
+========================================
 The entire game UI lives in one components.html call.
 JavaScript handles all screen navigation (show/hide divs).
-Python only injects board data and handles feedback saves.
 
-Run:  streamlit run app.py
+All game data and logic now go through the FastAPI backend (api.py).
+This file is responsible for:
+  - Rendering the HTML/CSS/JS shell
+  - Injecting the API base URL into the JS
+  - Injecting today's date label (cosmetic only)
+  - Injecting the logo
+
+Run frontend:  streamlit run app.py
+Run backend:   uvicorn api:app --reload
 """
-import json, os, hashlib, random, time, base64
+import base64
 from pathlib import Path
-
-BASE_DIR = Path(__file__).parent
-from datetime import date, datetime, timezone
+from datetime import date
 import streamlit as st
 import streamlit.components.v1 as components
+
+BASE_DIR = Path(__file__).parent
 
 st.set_page_config(
     page_title="Incairn · Daily Cairn",
@@ -22,70 +29,28 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# ── API base URL ──────────────────────────────────────────────
+# Change to your deployed API URL when hosting on Streamlit Cloud.
+# e.g. "https://your-api.railway.app"
+API_URL = "http://127.0.0.1:8000"
+
+# ── Cosmetic helpers (frontend-only — no game logic here) ─────
+def today_label():
+    return date.today().strftime("%A, %d %B %Y").upper()
+
+today_js = today_label()
+
 # Strip ALL Streamlit chrome — the HTML component IS the entire UI
 st.markdown("""
 <style>
   #MainMenu,footer,header{visibility:hidden}
-  .block-container{
-    padding:0!important;max-width:100%!important;
-    margin:0!important;
-  }
+  .block-container{padding:0!important;max-width:100%!important;margin:0!important;}
   section[data-testid="stSidebar"]{display:none}
   iframe{border:none!important;display:block!important}
   div[data-testid="stVerticalBlock"]{gap:0!important}
 </style>
 """, unsafe_allow_html=True)
 
-# ── Board data ────────────────────────────────────────────────
-@st.cache_data
-def load_boards():
-    with open(BASE_DIR / "incairn_boards.json") as f:
-        return json.load(f)
-
-def save_feedback(entry):
-    path = BASE_DIR / "feedback.json"
-    data = []
-    if os.path.exists(path):
-        with open(path) as f:
-            try: data = json.load(f)
-            except: data = []
-    data.append(entry)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-
-def get_daily_num(boards):
-    seed = int(hashlib.md5(date.today().isoformat().encode()).hexdigest(), 16)
-    return (seed % len(boards)) + 1
-
-def today_label():
-    return date.today().strftime("%A, %d %B %Y").upper()
-
-boards = load_boards()
-daily_num = get_daily_num(boards)
-
-# Prepare slim board objects for JS injection
-def slim(b):
-    num = b.get("board_number", 0)
-    # R2 boards use board_id as a readable slug (e.g. "R2-E01-0048")
-    # R1 boards use a UUID + a separate board_number field
-    bid = b["board_id"] if b["board_id"].startswith("R2-") else \
-          f"{b['difficulty'].lower()}-{str(num).zfill(2)}"
-    return {
-        "id":   b["board_id"],
-        "num":  num,
-        "bid":  bid,
-        "diff": b["difficulty"],
-        "gen":  b.get("generation", ""),
-        "rel":  b.get("relationship", ""),
-        "sol":  b["solution"],
-        "puz":  b["puzzle"],
-    }
-
-boards_js = json.dumps([slim(b) for b in boards])
-today_js  = today_label()
-daily_js  = daily_num
-
-# ── Maze logo ─────────────────────────────────────────────────
 _MAZE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <rect width="200" height="200" fill="#1a1714" rx="10"/>
 <rect x="6" y="6" width="188" height="188" fill="none" stroke="#c9a84c" stroke-width="6"/>
@@ -111,15 +76,6 @@ _MAZE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 LOGO_B64 = base64.b64encode(_MAZE.encode()).decode()
 LOGO_URL  = f"data:image/svg+xml;base64,{LOGO_B64}"
 
-# ── Feedback form state ───────────────────────────────────────
-for k, v in {
-    "fb_pending": False,
-    "fb_data": {},
-    "show_fb_form": False,
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
 # ══════════════════════════════════════════════════════════════
 # THE ENTIRE GAME — one HTML component, JS-driven screens
 # ══════════════════════════════════════════════════════════════
@@ -127,8 +83,7 @@ GAME_HTML = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<style>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><style>
 /* ════════════════════════════════════════════
    GLOBAL RESET & TOKENS
 ════════════════════════════════════════════ */
@@ -955,91 +910,30 @@ textarea.fb-text:focus{border-color:var(--goldD)}
 GAME_HTML += f"""
 <script>
 // ═══════════════════════════════════════════════════════
-// DATA
+// CONFIG  — injected by Python
 // ═══════════════════════════════════════════════════════
-const BOARDS     = {boards_js};
-const DAILY_NUM  = {daily_js};
-const TODAY_STR  = new Date().toISOString().split('T')[0];
-const RULE_NAMES = {{
-  // ── R1 (original boards) ────────────────────────────────
-  Gen01_Add:'Left + Right', Gen02_Mul:'Left × Right', Gen03_AddPlus1:'Left + Right + 1',
-  R1_E01:'Left + Right', R1_E02:'Left + Right + 1', R1_E03:'Left + Right − 1',
-  R1_E04:'2 × Left + Right', R1_E05:'Left + 2 × Right',
-  R1_E06:'|Left − Right|', R1_E07:'Max(Left, Right)', R1_E08:'Min(Left, Right)',
-  R1_M01:'Left × Right', R1_M02:'Left × Right + 1', R1_M03:'Left × Right − 1',
-  R1_M04:'Left × Right + Left', R1_M05:'Left × Right + Right',
-  R1_H01:'Left × Right + Left + Right', R1_H02:'Left × Right − Left',
-  R1_H03:'Left × Right − Right', R1_H04:'Left × Right − (Left+Right)', R1_H05:'Left × Right + 2',
-  // ── R2 (new boards) ─────────────────────────────────────
-  R2_E01:'Left + Right + a',      // z=x+y+a
-  R2_E02:'2 × Left + Right',      // z=2x+y
-  R2_E03:'Left + 2 × Right',      // z=x+2y
-  R2_E04:'Left + Right − a',      // z=x+y-a
-  R2_E09:'Min(Left, Right)',       // z=min(x,y)
-  R2_E10:'Max(Left, Right)',       // z=max(x,y)
-  R2_M02:'Left × Right − a',      // z=x*y-a
-  R2_M04:'Left × Right − Left',   // z=x*y-x
-  R2_M06:'Left × Right − Right',  // z=x*y-y
-  R2_M07:'(Left + Right) / 2 + a',// z=(x+y)/2+a
-  R2_M08:'(Left + Right) / 2 − a',// z=(x+y)/2-a
-  R2_H04:'Left × Right − a',      // z=x*y-a
-  R2_H08:'(Left × Right) / 2',    // z=(x*y)/2
-  R2_H09:'(Left × Right) / 3',    // z=(x*y)/3
-}};
-
-// Rule functions — used by doCheck() to verify the cairn.
-// For R2 boards the relationship string (b.rel) is shown on the win screen
-// instead of deriving a human label, so the RF function just needs to
-// compute the correct value.  Where a rule has a parameter (a) we parse
-// it from the relationship string at board-load time (see parseA below).
-function parseA(rel) {{
-  // Extract the constant from strings like "z=x+y+3", "z=x*y-7", "z=(x+y)/2+8"
-  const m = rel.match(/[+\-](\d+)$/);
-  return m ? parseInt(m[1]) * (rel.includes('-') && rel.lastIndexOf('-') > rel.lastIndexOf('+') ? -1 : 1) : 0;
-}}
-
-const RF = {{
-  // ── R1 ──
-  Gen01_Add:(a,b)=>a+b, Gen02_Mul:(a,b)=>a*b, Gen03_AddPlus1:(a,b)=>a+b+1,
-  R1_E01:(a,b)=>a+b, R1_E02:(a,b)=>a+b+1, R1_E03:(a,b)=>a+b-1,
-  R1_E04:(a,b)=>2*a+b, R1_E05:(a,b)=>a+2*b,
-  R1_E06:(a,b)=>Math.abs(a-b), R1_E07:(a,b)=>Math.max(a,b), R1_E08:(a,b)=>Math.min(a,b),
-  R1_M01:(a,b)=>a*b, R1_M02:(a,b)=>a*b+1, R1_M03:(a,b)=>a*b-1,
-  R1_M04:(a,b)=>a*b+a, R1_M05:(a,b)=>a*b+b,
-  R1_H01:(a,b)=>a*b+a+b, R1_H02:(a,b)=>a*b-a, R1_H03:(a,b)=>a*b-b,
-  R1_H04:(a,b)=>a*b-(a+b), R1_H05:(a,b)=>a*b+2,
-  // ── R2 — these are generated dynamically from the relationship string ──
-  // Stubs are replaced at game-start time by buildRF()
-}};
-
-// Build a live rule function from a relationship string like "z=x+y+3"
-function buildRF(rel) {{
-  const r = rel.replace(/\s/g,'').toLowerCase();
-  if(r==='z=x+y'||r==='z=y+x')   return (x,y)=>x+y;
-  if(r==='z=2x+y')                return (x,y)=>2*x+y;
-  if(r==='z=x+2y')                return (x,y)=>x+2*y;
-  if(r==='z=max(x,y)')            return (x,y)=>Math.max(x,y);
-  if(r==='z=min(x,y)')            return (x,y)=>Math.min(x,y);
-  if(r==='z=x*y')                 return (x,y)=>x*y;
-  if(r==='z=x*y-x')               return (x,y)=>x*y-x;
-  if(r==='z=x*y-y')               return (x,y)=>x*y-y;
-  // z=x+y+N  /  z=x+y-N
-  let m=r.match(/^z=x\+y([+\-]\d+)$/);
-  if(m) {{ const k=parseInt(m[1]); return (x,y)=>x+y+k; }}
-  // z=x*y+N  /  z=x*y-N
-  m=r.match(/^z=x\*y([+\-]\d+)$/);
-  if(m) {{ const k=parseInt(m[1]); return (x,y)=>x*y+k; }}
-  // z=(x+y)/2+N  /  z=(x+y)/2-N  /  z=(x+y)/2
-  m=r.match(/^z=\(x\+y\)\/2([+\-]\d+)?$/);
-  if(m) {{ const k=m[1]?parseInt(m[1]):0; return (x,y)=>(x+y)/2+k; }}
-  // z=(x*y)/2  /  z=(x*y)/3
-  m=r.match(/^z=\(x\*y\)\/(\d+)$/);
-  if(m) {{ const d=parseInt(m[1]); return (x,y)=>(x*y)/d; }}
-  // fallback: eval-based (safe — only board data)
-  return null;
-}}
+const API_BASE  = "{API_URL}";
+const TODAY_STR = new Date().toISOString().split('T')[0];
 const TR=[[0,1,2],[1,3,4],[2,4,5],[3,6,7],[4,7,8],[5,8,9]];
 const ROWS=[[0],[1,2],[3,4,5],[6,7,8,9]];
+
+// ═══════════════════════════════════════════════════════
+// API HELPERS
+// ═══════════════════════════════════════════════════════
+async function apiPost(path, body) {{
+  const res = await fetch(API_BASE + path, {{
+    method:'POST', headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify(body)
+  }});
+  if(!res.ok) {{ const e=await res.json().catch(()=>({{}})); throw new Error(e.detail||'API error '+res.status); }}
+  return res.json();
+}}
+async function apiGet(path, params={{}}) {{
+  const qs=new URLSearchParams(params).toString();
+  const res=await fetch(API_BASE+path+(qs?'?'+qs:''));
+  if(!res.ok) {{ const e=await res.json().catch(()=>({{}})); throw new Error(e.detail||'API error '+res.status); }}
+  return res.json();
+}}
 
 // ═══════════════════════════════════════════════════════
 // SCREEN NAVIGATION
@@ -1059,19 +953,6 @@ function showScreen(id) {{
 // ═══════════════════════════════════════════════════════
 function loadHomeStats() {{
   try {{
-    const daily = BOARDS.find(b=>b.num===DAILY_NUM)||BOARDS[0];
-    const dc = daily.diff.toLowerCase();
-    const diffColors = {{easy:'#7ab06a',medium:'#d4a843',hard:'#c08860'}};
-    const diffBg = {{easy:'#1a2a14',medium:'#2a2210',hard:'#2a1e14'}};
-    const diffBdr = {{easy:'#3a6028',medium:'#6a5218',hard:'#6a3818'}};
-    const pill = document.getElementById('daily-diff-pill');
-    if(pill) {{
-      pill.textContent = daily.diff;
-      pill.style.background = diffBg[dc];
-      pill.style.color = diffColors[dc];
-      pill.style.border = '1px solid '+diffBdr[dc];
-    }}
-    document.getElementById('h-pnum').textContent = 'Puzzle #'+DAILY_NUM;
     const s = JSON.parse(localStorage.getItem('incairn_stats')||'{{}}');
     document.getElementById('st-played').textContent = s.played||'—';
     document.getElementById('st-streak').textContent = s.streak||'—';
@@ -1080,6 +961,7 @@ function loadHomeStats() {{
     const b=s.bestTime||0,m=Math.floor(b/60),sec=b%60;
     document.getElementById('st-best').textContent =
       b>0?(m>0?m+'m '+sec+'s':sec+'s'):'—';
+    document.getElementById('h-pnum').textContent = 'Daily Cairn';
   }} catch(e) {{}}
 }}
 
@@ -1087,50 +969,82 @@ function loadHomeStats() {{
 // GAME STATE
 // ═══════════════════════════════════════════════════════
 let G = {{
-  board:null, mode:'daily',
+  board:null, mode:'daily', sessionToken:null,
   C:Array(10).fill(null), CID:{{}}, CS:{{}},
   drag:null, moves:0, solved:false,
   elapsed:0, t0:0, timerRef:null, hintsLeft:3
 }};
 
-function startDailyGame() {{
-  const b = BOARDS.find(b=>b.num===DAILY_NUM)||BOARDS[0];
-  startGame(b, 'daily');
+// ── Load board from API then launch ──────────────────
+async function startDailyGame() {{
+  showScreen('game');
+  showToast("Loading today's cairn…",'info');
+  try {{
+    const tzOffset = new Date().getTimezoneOffset();
+    const data = await apiPost('/incairn/load', {{mode:'daily', tz_offset:tzOffset}});
+    _launchGame(data, 'daily');
+  }} catch(e) {{ showToast('Could not load board: '+e.message,'err'); }}
+}}
+async function startPractice(diff) {{
+  showScreen('game');
+  showToast('Loading '+diff+' board…','info');
+  try {{
+    const data = await apiPost('/incairn/load', {{mode:'practice', difficulty:diff}});
+    _launchGame(data, 'practice');
+  }} catch(e) {{ showToast('Could not load board: '+e.message,'err'); }}
+}}
+async function startPastGame(dateStr) {{
+  showScreen('game');
+  showToast('Loading cairn for '+dateStr+'…','info');
+  try {{
+    const data = await apiPost('/incairn/load', {{mode:'past', date:dateStr}});
+    _launchGame(data, 'past');
+  }} catch(e) {{ showToast('Could not load board: '+e.message,'err'); }}
 }}
 
-function startPractice(diff) {{
-  const pool = BOARDS.filter(b=>b.diff===diff);
-  const b = pool[Math.floor(Math.random()*pool.length)];
-  startGame(b, 'practice');
-}}
-
-function startGame(board, mode) {{
-  G.board=board; G.mode=mode;
+function _launchGame(data, mode) {{
+  const board = {{
+    board_id: data.board_id,
+    bid:      data.bid,
+    diff:     data.difficulty,
+    gen:      data.generation,
+    rel:      data.relationship,
+    puz:      data.numbers,
+    // solution lives on the server — never sent to the client
+  }};
+  G.board=board; G.mode=mode; G.sessionToken=data.session_token;
   G.C=Array(10).fill(null); G.CID={{}}; G.CS={{}};
   G.drag=null; G.moves=0; G.solved=false;
   G.elapsed=0; G.t0=Date.now(); G.hintsLeft=3;
-  if(G.timerRef)clearInterval(G.timerRef);
+  if(G.timerRef) clearInterval(G.timerRef);
   G.timerRef=setInterval(()=>{{
     G.elapsed=Math.floor((Date.now()-G.t0)/1000);
     const m=Math.floor(G.elapsed/60),s=G.elapsed%60;
     document.getElementById('g-tmr').textContent=m+':'+(s<10?'0':'')+s;
   }},1000);
-  // Set UI labels
   document.getElementById('g-bid').textContent=board.bid.toUpperCase();
   const dc=board.diff.toLowerCase();
   const badge=document.getElementById('g-diff-badge');
   badge.textContent=board.diff; badge.className='badge '+dc;
   document.getElementById('g-mode-label').textContent =
-    mode==='daily'?"Today's Cairn":"Practice · "+board.diff;
+    mode==='daily'?"Today's Cairn": mode==='past'?"Past Cairn":"Practice · "+board.diff;
   document.getElementById('g-mvc').textContent='0';
   document.getElementById('g-tmr').textContent='0:00';
   document.getElementById('g-placed').textContent='0 / 10 placed';
   document.getElementById('g-prog').style.width='0%';
   document.getElementById('hbtn').textContent='💡 Hint (3)';
   document.getElementById('hbtn').disabled=false;
-  initTray();
-  renderCells();
-  showScreen('game');
+  const diffColors={{easy:'#7ab06a',medium:'#d4a843',hard:'#c08860'}};
+  const diffBg={{easy:'#1a2a14',medium:'#2a2210',hard:'#2a1e14'}};
+  const diffBdr={{easy:'#3a6028',medium:'#6a5218',hard:'#6a3818'}};
+  const pill=document.getElementById('daily-diff-pill');
+  if(pill&&mode==='daily'){{
+    pill.textContent=board.diff;
+    pill.style.background=diffBg[dc];
+    pill.style.color=diffColors[dc];
+    pill.style.border='1px solid '+diffBdr[dc];
+  }}
+  initTray(); renderCells(); showScreen('game');
 }}
 
 // ═══════════════════════════════════════════════════════
@@ -1231,80 +1145,107 @@ function doReset(){{
     const c=document.getElementById(id);if(c)c.classList.remove('used','dragging');}});
   clrV(); renderCells(); updateProg();
 }}
-function doHint(){{
-  // If all cells are filled but wrong: highlight the first wrong cell
-  // using the solution, so player knows which stone to swap out.
-  const allFilled = G.C.every(v => v !== null);
 
-  if(allFilled){{
-    // Find the first cell that has the wrong value
-    const order = [6,7,8,9, 3,4,5, 1,2, 0];
-    for(const i of order){{
-      if(G.C[i] !== G.board.sol[i]){{
-        hlt(i, G.board.sol[i]);
-        return;
-      }}
+// ── Hint  (API) ───────────────────────────────────────
+async function doHint(){{
+  if(!G.sessionToken)return;
+  try {{
+    const data = await apiPost('/incairn/hint', {{
+      board_id:         G.board.board_id,
+      player_placement: Array.from({{length:10}},(_,i)=>G.C[i]===null?null:G.C[i]),
+      session_token:    G.sessionToken
+    }});
+    G.hintsLeft = data.hints_left;
+    document.getElementById('hbtn').textContent='💡 Hint ('+G.hintsLeft+')';
+    if(G.hintsLeft===0) document.getElementById('hbtn').disabled=true;
+    if(data.cell_index===null){{
+      showToast('Every stone is in place!','win'); return;
     }}
-    // All cells correct — already solved
-    showToast('Every stone is in place!','win');
-    return;
-  }}
-
-  // Otherwise: find an empty cell whose correct chip is still in the tray
-  const unplaced = Object.values(G.CS)
-    .filter(c => !c.placed)
-    .map(c => c.v);
-
-  const order = [6,7,8,9, 3,4,5, 1,2, 0];
-  for(const i of order){{
-    if(G.C[i] !== null) continue;
-    const correctVal = G.board.sol[i];
-    if(unplaced.includes(correctVal)){{
-      hlt(i, correctVal);
-      return;
+    hlt(data.cell_index, data.correct_value);
+  }} catch(e) {{
+    if(e.message.includes('No hints')) {{
+      showToast('No hints remaining','info');
+      document.getElementById('hbtn').disabled=true;
+    }} else {{
+      showToast('Hint unavailable: '+e.message,'err');
     }}
   }}
-  // Shouldn't reach here, but fallback
-  showToast('Try rearranging the stones already placed','info');
 }}
 function hlt(i,v){{
-  G.hintsLeft=Math.max(0,G.hintsLeft-1);
-  document.getElementById('hbtn').textContent='💡 Hint ('+G.hintsLeft+')';
-  if(G.hintsLeft===0)document.getElementById('hbtn').disabled=true;
   const el=document.querySelector('.cell[data-i="'+i+'"]');if(!el)return;
   el.classList.add('hint'); showToast('This stone holds '+v,'info');
   setTimeout(()=>el.classList.remove('hint'),3500);
 }}
-function doCheck(){{
+
+// ── Check solution  (API) ────────────────────────────
+async function doCheck(){{
   if(G.solved)return;
   const vals=Array.from({{length:10}},(_,i)=>G.C[i]);
   if(vals.some(v=>v===null)){{showToast('Place all ten stones first','info');return;}}
-  // R2 boards: build rule fn from relationship string
-  const fn = G.board.gen.startsWith('R2_')
-    ? buildRF(G.board.rel)
-    : RF[G.board.gen];
-  if(!fn){{showToast('Unknown rule — cannot verify','err');return;}}
-  let ok=true;
-  document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));
-  let delay=0;
-  TR.forEach(([p,l,r])=>{{
-    const good=vals[p]===fn(vals[l],vals[r]); if(!good)ok=false;
-    [p,l,r].forEach(idx=>{{
-      const el=document.querySelector('.cell[data-i="'+idx+'"]');
-      if(el)setTimeout(()=>el.classList.add(good?'ok':'bad'),delay);
-      delay+=45;
-    }});
-  }});
   G.moves++; document.getElementById('g-mvc').textContent=G.moves;
-  setTimeout(()=>{{
-    if(ok){{G.solved=true;clearInterval(G.timerRef);
-      showToast('The cairn is complete ◈','win');
-      launchConfetti(); saveProgress(); showWin();}}
-    else showToast('The pattern is not right — rearrange the stones','err');
-  }},delay+100);
+  try {{
+    const data = await apiPost('/incairn/check', {{
+      board_id:        G.board.board_id,
+      player_solution: vals,
+      session_token:   G.sessionToken
+    }});
+    if(data.correct){{
+      // Animate all cells green
+      document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));
+      let delay=0;
+      [[0,1,2],[1,3,4],[2,4,5],[3,6,7],[4,7,8],[5,8,9]].forEach(([p,l,r])=>{{
+        [p,l,r].forEach(idx=>{{
+          const el=document.querySelector('.cell[data-i="'+idx+'"]');
+          if(el)setTimeout(()=>el.classList.add('ok'),delay);
+          delay+=45;
+        }});
+      }});
+      G.solved=true; clearInterval(G.timerRef);
+      setTimeout(()=>{{
+        showToast('The cairn is complete ◈','win');
+        launchConfetti(); saveProgress(); showWin();
+      }},delay+100);
+    }} else {{
+      // Fetch answer to highlight wrong cells
+      try {{
+        const ans = await apiGet('/incairn/answer', {{board_id:G.board.board_id}});
+        document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));
+        let delay=0;
+        [[0,1,2],[1,3,4],[2,4,5],[3,6,7],[4,7,8],[5,8,9]].forEach(([p,l,r])=>{{
+          const sol=ans.solution;
+          const good=(vals[p]===sol[p]&&vals[l]===sol[l]&&vals[r]===sol[r]);
+          [p,l,r].forEach(idx=>{{
+            const el=document.querySelector('.cell[data-i="'+idx+'"]');
+            if(el)setTimeout(()=>el.classList.add(vals[idx]===sol[idx]?'ok':'bad'),delay);
+            delay+=45;
+          }});
+        }});
+        setTimeout(()=>showToast('The pattern is not right — rearrange the stones','err'),delay+100);
+      }} catch(_) {{
+        showToast('The pattern is not right — rearrange the stones','err');
+      }}
+    }}
+  }} catch(e) {{
+    showToast('Check failed: '+e.message,'err');
+  }}
 }}
 function clrV(){{document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));}}
 
+// ── Reveal answer button (optional convenience) ───────
+async function doReveal(){{
+  if(!G.board) return;
+  try {{
+    const ans = await apiGet('/incairn/answer', {{board_id:G.board.board_id}});
+    ans.solution.forEach((v,i)=>{{
+      G.C[i]=v;
+      // find the chip with that value and mark it used
+      const chip=Object.entries(G.CS).find(([id,cs])=>cs.v===v&&!cs.placed);
+      if(chip){{G.CS[chip[0]].placed=true;G.CID[i]=chip[0];
+               const c=document.getElementById(chip[0]);if(c)c.classList.add('used');}}
+    }});
+    renderCells(); updateProg();
+    showToast('Solution revealed','info');
+  }} catch(e) {{ showToast('Could not reveal: '+e.message,'err'); }}
 // ═══════════════════════════════════════════════════════
 // WIN
 // ═══════════════════════════════════════════════════════
@@ -1316,10 +1257,8 @@ function showWin(){{
     document.getElementById('w-bid').textContent=b.bid.toUpperCase();
     const badge=document.getElementById('w-diff');
     badge.textContent=b.diff; badge.className='badge '+b.diff.toLowerCase();
-    document.getElementById('w-rule').textContent=
-      'Parent = '+(G.board.gen.startsWith('R2_')
-        ? G.board.rel                        // e.g. "z=x+y+3"
-        : (RULE_NAMES[G.board.gen]||G.board.gen));
+    // Show the relationship string from the API response
+    document.getElementById('w-rule').textContent='Parent = '+b.rel;
     const st=JSON.parse(localStorage.getItem('incairn_stats')||'{{}}');
     document.getElementById('w-streak').textContent=
       (st.streak||0)>0?'🔥 '+st.streak+' day streak':'🔥 Keep going!';
@@ -1338,7 +1277,7 @@ function onWinPlayAgain(){{
 }}
 
 // ═══════════════════════════════════════════════════════
-// PROGRESS SAVE
+// PROGRESS SAVE  (localStorage — client-side only)
 // ═══════════════════════════════════════════════════════
 function saveProgress(){{
   try{{
@@ -1429,24 +1368,24 @@ document.querySelectorAll('.star').forEach(s=>{{
       x.style.opacity=parseInt(x.dataset.v)<=(fbRatings[g]||0)?'1':'.3');
   }});
 }});
-function submitFeedback(){{
+async function submitFeedback(){{
   const data={{
-    board_id:G.board?G.board.bid:'',
-    difficulty:G.board?G.board.diff:'',
-    time_taken:G.elapsed+'s',
-    difficulty_rating:fbRatings.diff,
-    fun_rating:fbRatings.fun,
-    comments:document.getElementById('fb-comments').value,
-    timestamp:new Date().toISOString()
+    board_id: G.board?G.board.board_id:'',
+    rating:   fbRatings.diff||fbRatings.fun||null,
+    comment:  document.getElementById('fb-comments').value
   }};
-  // Store feedback locally in localStorage
+  try {{
+    await apiPost('/incairn/feedback', data);
+  }} catch(e) {{
+    // best-effort — don't block the player
+    console.warn('Feedback save failed:', e.message);
+  }}
+  // Also keep a local copy
   try{{
     const fb=JSON.parse(localStorage.getItem('incairn_feedback')||'[]');
-    fb.push(data);
+    fb.push({{...data, timestamp:new Date().toISOString()}});
     localStorage.setItem('incairn_feedback',JSON.stringify(fb));
-  }}catch(e){{}}
-  // Also signal Python via postMessage (best-effort)
-  try{{window.parent.postMessage({{type:'incairn_feedback',data}},'*');}}catch(e){{}}
+  }}catch(_){{}}
   showToast('Thanks for your feedback!','win');
   setTimeout(()=>showScreen('win'), 800);
 }}
