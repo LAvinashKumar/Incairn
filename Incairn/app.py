@@ -1246,6 +1246,7 @@ async function doReveal(){{
     renderCells(); updateProg();
     showToast('Solution revealed','info');
   }} catch(e) {{ showToast('Could not reveal: '+e.message,'err'); }}
+}}
 // ═══════════════════════════════════════════════════════
 // WIN
 // ═══════════════════════════════════════════════════════
