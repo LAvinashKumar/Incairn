@@ -331,7 +331,7 @@ GAME_HTML += f"""
     </div>
     <div class="stat-box">
       <div class="stat-val" id="st-best">—</div>
-      <div class="stat-lbl">Best Time</div>
+      <div class="stat-lbl">Best</div>
     </div>
   </div>
 
@@ -513,6 +513,12 @@ GAME_HTML += """
   0%,100%{box-shadow:0 0 0 0 rgba(192,136,32,.3)}
   50%{box-shadow:0 0 0 8px rgba(192,136,32,.1)}
 }
+.cell.locked{
+  border-color:var(--goldD)!important;border-style:solid!important;
+  background:radial-gradient(ellipse at 30% 30%,#2c2410,#1e1808)!important;
+  color:var(--gold)!important;cursor:default!important;
+  box-shadow:0 0 10px rgba(160,120,48,.3)!important
+}
 .rm{
   position:absolute;top:3px;right:4px;
   font-size:.5rem;color:var(--muted);cursor:pointer;
@@ -585,6 +591,15 @@ GAME_HTML += """
   transition:color .1s
 }
 .btn-reset:hover{color:var(--sub)}
+.btn-giveup{
+  width:100%;max-width:520px;
+  background:transparent;color:var(--muted);
+  border:1px solid var(--border);border-radius:24px;
+  padding:10px;font-size:.68rem;cursor:pointer;
+  font-family:'Georgia',serif;letter-spacing:.1em;
+  text-transform:uppercase;transition:color .15s,border-color .15s
+}
+.btn-giveup:hover{color:#c07050;border-color:var(--wrongB)}
 
 /* Footer */
 .g-foot{
@@ -622,9 +637,9 @@ GAME_HTML += """
 
 <!-- top bar -->
 <div class="g-bar">
-  <div class="g-stat"><div class="g-sv" id="g-tmr">0:00</div><div class="g-sl">time</div></div>
+  <div class="g-stat"><div class="g-sv" id="g-att">0</div><div class="g-sl">attempts</div></div>
   <div class="g-title" id="g-mode-label">Incairn</div>
-  <div class="g-stat"><div class="g-sv" id="g-mvc">0</div><div class="g-sl">moves</div></div>
+  <div class="g-stat"><div class="g-sv" id="g-rev">0</div><div class="g-sl">reveals</div></div>
 </div>
 
 <!-- board info -->
@@ -659,9 +674,12 @@ GAME_HTML += """
 
 <!-- action row -->
 <div class="act-row">
-  <button class="btn-hint" id="hbtn" onclick="doHint()">💡 Hint (3)</button>
+  <button class="btn-hint" id="revbtn" onclick="doReveal()">� Reveal (5)</button>
   <button class="btn-check" onclick="doCheck()">Check the Cairn</button>
   <button class="btn-reset" onclick="doReset()">↺</button>
+</div>
+<div class="act-row" style="margin-top:0">
+  <button class="btn-giveup" id="giveupbtn" onclick="doGiveUp()" style="display:none">Give Up</button>
 </div>
 <div class="g-foot">
   <span id="g-placed">0 / 10 placed</span>
@@ -749,15 +767,12 @@ GAME_HTML += """
 <div class="win-divider"></div>
 
 <div class="win-stats">
-  <div class="wsc"><div class="wsv" id="w-time">—</div><div class="wsl">Time</div></div>
+  <div class="wsc"><div class="wsv" id="w-att">—</div><div class="wsl">Attempts</div></div>
   <div class="wsc">
     <div class="wsv" id="w-bid" style="font-size:.85rem;letter-spacing:.08em">—</div>
     <div class="wsl">Board</div>
   </div>
-  <div class="wsc">
-    <div class="wsv"><span class="badge" id="w-diff">—</span></div>
-    <div class="wsl" style="margin-top:8px">Difficulty</div>
-  </div>
+  <div class="wsc"><div class="wsv" id="w-rev">—</div><div class="wsl">Reveals</div></div>
 </div>
 
 <div class="rule-reveal">
@@ -953,14 +968,18 @@ function showScreen(id) {{
 // ═══════════════════════════════════════════════════════
 function loadHomeStats() {{
   try {{
-    const s = JSON.parse(localStorage.getItem('incairn_stats')||'{{}}');
+    const s   = JSON.parse(localStorage.getItem('incairn_stats')||'{{}}');
+    const slv = JSON.parse(localStorage.getItem('incairn_solves')||'[]');
     document.getElementById('st-played').textContent = s.played||'—';
     document.getElementById('st-streak').textContent = s.streak||'—';
     document.getElementById('h-streak').textContent =
       (s.streak||0)>0?'🔥 '+s.streak+' day streak':'🔥 Start your streak';
-    const b=s.bestTime||0,m=Math.floor(b/60),sec=b%60;
+    // Best = fewest attempts across all solves
+    const best = slv.length
+      ? Math.min(...slv.map(sv=>sv.attempts||Infinity).filter(v=>isFinite(v)))
+      : 0;
     document.getElementById('st-best').textContent =
-      b>0?(m>0?m+'m '+sec+'s':sec+'s'):'—';
+      best>0?best+' attempt'+(best!==1?'s':''):'—';
     document.getElementById('h-pnum').textContent = 'Daily Cairn';
   }} catch(e) {{}}
 }}
@@ -968,11 +987,16 @@ function loadHomeStats() {{
 // ═══════════════════════════════════════════════════════
 // GAME STATE
 // ═══════════════════════════════════════════════════════
+// REVEAL_SEQ: fixed order of cell indices to reveal
+const REVEAL_SEQ = [4, [0,6,9], 1, 7, 8];
+
 let G = {{
   board:null, mode:'daily', sessionToken:null,
   C:Array(10).fill(null), CID:{{}}, CS:{{}},
-  drag:null, moves:0, solved:false,
-  elapsed:0, t0:0, timerRef:null, hintsLeft:3
+  drag:null, attempts:0, solved:false,
+  revealsUsed:0,          // how many Reveal steps used (0-5)
+  lockedCells:new Set(),  // cell indices locked by reveals
+  cachedSolution:null     // fetched once, reused for all reveals
 }};
 
 // ── Load board from API then launch ──────────────────
@@ -1010,30 +1034,25 @@ function _launchGame(data, mode) {{
     gen:      data.generation,
     rel:      data.relationship,
     puz:      data.numbers,
-    // solution lives on the server — never sent to the client
   }};
   G.board=board; G.mode=mode; G.sessionToken=data.session_token;
   G.C=Array(10).fill(null); G.CID={{}}; G.CS={{}};
-  G.drag=null; G.moves=0; G.solved=false;
-  G.elapsed=0; G.t0=Date.now(); G.hintsLeft=3;
-  if(G.timerRef) clearInterval(G.timerRef);
-  G.timerRef=setInterval(()=>{{
-    G.elapsed=Math.floor((Date.now()-G.t0)/1000);
-    const m=Math.floor(G.elapsed/60),s=G.elapsed%60;
-    document.getElementById('g-tmr').textContent=m+':'+(s<10?'0':'')+s;
-  }},1000);
+  G.drag=null; G.attempts=0; G.solved=false;
+  G.revealsUsed=0; G.lockedCells=new Set(); G.cachedSolution=null;
+
   document.getElementById('g-bid').textContent=board.bid.toUpperCase();
   const dc=board.diff.toLowerCase();
   const badge=document.getElementById('g-diff-badge');
   badge.textContent=board.diff; badge.className='badge '+dc;
   document.getElementById('g-mode-label').textContent =
     mode==='daily'?"Today's Cairn": mode==='past'?"Past Cairn":"Practice · "+board.diff;
-  document.getElementById('g-mvc').textContent='0';
-  document.getElementById('g-tmr').textContent='0:00';
+  document.getElementById('g-att').textContent='0';
+  document.getElementById('g-rev').textContent='0';
   document.getElementById('g-placed').textContent='0 / 10 placed';
   document.getElementById('g-prog').style.width='0%';
-  document.getElementById('hbtn').textContent='💡 Hint (3)';
-  document.getElementById('hbtn').disabled=false;
+  document.getElementById('revbtn').textContent='� Reveal (5)';
+  document.getElementById('revbtn').disabled=false;
+  document.getElementById('giveupbtn').style.display='none';
   const diffColors={{easy:'#7ab06a',medium:'#d4a843',hard:'#c08860'}};
   const diffBg={{easy:'#1a2a14',medium:'#2a2210',hard:'#2a1e14'}};
   const diffBdr={{easy:'#3a6028',medium:'#6a5218',hard:'#6a3818'}};
@@ -1072,27 +1091,27 @@ function initTray(){{
   }});
   tray.ondragover=e=>e.preventDefault();
   tray.ondrop=e=>{{e.preventDefault();
-    if(G.drag&&G.drag.t==='cell'){{ret(G.drag.idx);G.drag=null;clrV();}}}};
+    if(G.drag&&G.drag.t==='cell'){{ret(G.drag.idx);G.drag=null;}}}};
 }}
 
 function onDrop(e){{
   e.preventDefault(); const el=e.currentTarget; el.classList.remove('over');
   const ti=parseInt(el.dataset.i); if(!G.drag)return;
+  if(G.lockedCells.has(ti)){{G.drag=null;return;}} // can't drop onto a locked cell
   if(G.drag.t==='tray'){{
     if(G.C[ti]!==null)ret(ti); place(G.drag.id,G.CS[G.drag.id].v,ti,true);
   }} else if(G.drag.t==='cell'&&G.drag.idx!==ti){{
+    if(G.lockedCells.has(G.drag.idx)){{G.drag=null;return;}} // can't drag a locked cell
     [G.C[ti],G.C[G.drag.idx]]=[G.C[G.drag.idx],G.C[ti]];
     [G.CID[ti],G.CID[G.drag.idx]]=[G.CID[G.drag.idx],G.CID[ti]];
-    G.moves++; document.getElementById('g-mvc').textContent=G.moves;
     renderCells(); updateProg();
   }}
-  G.drag=null; clrV();
+  G.drag=null;
 }}
 
 function place(id,v,i,anim){{
   G.C[i]=v; G.CS[id].placed=true; G.CID[i]=id;
   document.getElementById(id).classList.add('used');
-  G.moves++; document.getElementById('g-mvc').textContent=G.moves;
   renderCells();
   if(anim){{const el=document.querySelector('.cell[data-i="'+i+'"]');
     if(el){{el.classList.add('snap');el.addEventListener('animationend',()=>el.classList.remove('snap'),{{once:true}});}};
@@ -1100,27 +1119,33 @@ function place(id,v,i,anim){{
   updateProg(); checkRowFlash(i);
 }}
 function ret(i){{
+  if(G.lockedCells.has(i))return; // locked by reveal — cannot be moved
   const id=G.CID[i]; G.C[i]=null; delete G.CID[i];
   if(id){{G.CS[id].placed=false;const c=document.getElementById(id);if(c)c.classList.remove('used');}}
   renderCells(); updateProg();
 }}
-function rmCell(i){{ret(i);clrV();}}
+function rmCell(i){{ret(i);}}
 function renderCells(){{
   document.querySelectorAll('.cell').forEach(el=>{{
     const i=parseInt(el.dataset.i),v=G.C[i];
-    el.textContent=''; el.classList.remove('full','ok','bad','hint');
+    const locked=G.lockedCells.has(i);
+    el.textContent=''; el.classList.remove('full','ok','bad','hint','locked');
     if(v!==null){{
-      el.textContent=v; el.classList.add('full'); el.draggable=true;
-      el.ondragstart=e=>{{G.drag={{t:'cell',idx:i}};e.dataTransfer.effectAllowed='move';}};
-      const rm=document.createElement('button');rm.className='rm';rm.textContent='✕';
-      rm.onclick=()=>rmCell(i); el.appendChild(rm);
-      // Touch listeners for mobile rearranging
-      el.ontouchstart=tS;
-      el.ontouchmove=tM;
-      el.ontouchend=tE;
+      el.textContent=v; el.classList.add('full');
+      if(locked){{
+        el.classList.add('locked');
+        el.draggable=false; el.ondragstart=null;
+        el.ontouchstart=null; el.ontouchmove=null; el.ontouchend=null;
+      }}else{{
+        el.draggable=true;
+        el.ondragstart=e=>{{G.drag={{t:'cell',idx:i}};e.dataTransfer.effectAllowed='move';}};
+        const rm=document.createElement('button');rm.className='rm';rm.textContent='✕';
+        rm.onclick=()=>rmCell(i); el.appendChild(rm);
+        el.ontouchstart=tS; el.ontouchmove=tM; el.ontouchend=tE;
+      }}
     }}else{{
-      el.draggable=false;el.ondragstart=null;
-      el.ontouchstart=null;el.ontouchmove=null;el.ontouchend=null;
+      el.draggable=false; el.ondragstart=null;
+      el.ontouchstart=null; el.ontouchmove=null; el.ontouchend=null;
     }}
   }});
 }}
@@ -1140,41 +1165,84 @@ function checkRowFlash(pi){{
   }});
 }}
 function doReset(){{
-  G.C=Array(10).fill(null); G.CID={{}};
-  Object.keys(G.CS).forEach(id=>{{G.CS[id].placed=false;
-    const c=document.getElementById(id);if(c)c.classList.remove('used','dragging');}});
-  clrV(); renderCells(); updateProg();
-}}
-
-// ── Hint  (API) ───────────────────────────────────────
-async function doHint(){{
-  if(!G.sessionToken)return;
-  try {{
-    const data = await apiPost('/incairn/hint', {{
-      board_id:         G.board.board_id,
-      player_placement: Array.from({{length:10}},(_,i)=>G.C[i]===null?null:G.C[i]),
-      session_token:    G.sessionToken
-    }});
-    G.hintsLeft = data.hints_left;
-    document.getElementById('hbtn').textContent='💡 Hint ('+G.hintsLeft+')';
-    if(G.hintsLeft===0) document.getElementById('hbtn').disabled=true;
-    if(data.cell_index===null){{
-      showToast('Every stone is in place!','win'); return;
-    }}
-    hlt(data.cell_index, data.correct_value);
-  }} catch(e) {{
-    if(e.message.includes('No hints')) {{
-      showToast('No hints remaining','info');
-      document.getElementById('hbtn').disabled=true;
-    }} else {{
-      showToast('Hint unavailable: '+e.message,'err');
+  // Return only unlocked cells to the tray
+  for(let i=0;i<10;i++){{
+    if(!G.lockedCells.has(i)&&G.C[i]!==null){{
+      const id=G.CID[i]; G.C[i]=null; delete G.CID[i];
+      if(id){{G.CS[id].placed=false;const c=document.getElementById(id);if(c)c.classList.remove('used','dragging');}}
     }}
   }}
+  renderCells(); updateProg();
 }}
-function hlt(i,v){{
-  const el=document.querySelector('.cell[data-i="'+i+'"]');if(!el)return;
-  el.classList.add('hint'); showToast('This stone holds '+v,'info');
-  setTimeout(()=>el.classList.remove('hint'),3500);
+
+// ── Reveal  (fetches solution once, reveals stones in fixed order) ───
+async function doReveal(){{
+  if(G.solved||G.revealsUsed>=5)return;
+  // Fetch solution once and cache it
+  if(!G.cachedSolution){{
+    try{{
+      const ans=await apiGet('/incairn/answer',{{board_id:G.board.board_id}});
+      G.cachedSolution=ans.solution;
+    }}catch(e){{showToast('Reveal unavailable: '+e.message,'err');return;}}
+  }}
+  const sol=G.cachedSolution;
+  // Reveal the next step in the sequence
+  const step=REVEAL_SEQ[G.revealsUsed]; // number or array
+  const indices=Array.isArray(step)?step:[step];
+  indices.forEach(ci=>{{
+    // If a non-locked stone is in this cell, return it to the tray first
+    if(G.C[ci]!==null&&!G.lockedCells.has(ci))ret(ci);
+    // Find a tray chip matching the solution value that isn't already placed/locked
+    const need=sol[ci];
+    const chip=Object.entries(G.CS).find(([id,cs])=>cs.v===need&&!cs.placed);
+    if(chip){{
+      G.CS[chip[0]].placed=true;
+      G.C[ci]=need;
+      G.CID[ci]=chip[0];
+      const c=document.getElementById(chip[0]);if(c)c.classList.add('used');
+    }}
+    G.lockedCells.add(ci);
+  }});
+  G.revealsUsed++;
+  document.getElementById('g-rev').textContent=G.revealsUsed;
+  const remaining=5-G.revealsUsed;
+  document.getElementById('revbtn').textContent=
+    remaining>0?'👁 Reveal ('+remaining+')':'👁 Revealed';
+  if(remaining===0)document.getElementById('revbtn').disabled=true;
+  // Show Give Up after all 5 reveals
+  if(G.revealsUsed===5)document.getElementById('giveupbtn').style.display='';
+  renderCells(); updateProg();
+  showToast('Stone'+(indices.length>1?'s':'')+' revealed','info');
+}}
+
+// ── Give Up — reveal full solution without winning ───────────
+async function doGiveUp(){{
+  if(G.solved)return;
+  if(!G.cachedSolution){{
+    try{{
+      const ans=await apiGet('/incairn/answer',{{board_id:G.board.board_id}});
+      G.cachedSolution=ans.solution;
+    }}catch(e){{showToast('Could not retrieve solution: '+e.message,'err');return;}}
+  }}
+  const sol=G.cachedSolution;
+  // Fill every cell from the solution, locking all
+  for(let ci=0;ci<10;ci++){{
+    if(G.C[ci]!==null&&!G.lockedCells.has(ci))ret(ci);
+    const need=sol[ci];
+    const chip=Object.entries(G.CS).find(([id,cs])=>cs.v===need&&!cs.placed);
+    if(chip){{
+      G.CS[chip[0]].placed=true;
+      G.C[ci]=need;
+      G.CID[ci]=chip[0];
+      const c=document.getElementById(chip[0]);if(c)c.classList.add('used');
+    }}
+    G.lockedCells.add(ci);
+  }}
+  G.solved=true;
+  document.getElementById('revbtn').disabled=true;
+  document.getElementById('giveupbtn').style.display='none';
+  renderCells(); updateProg();
+  showToast('The cairn is revealed — better luck next time','info');
 }}
 
 // ── Check solution  (API) ────────────────────────────
@@ -1182,7 +1250,8 @@ async function doCheck(){{
   if(G.solved)return;
   const vals=Array.from({{length:10}},(_,i)=>G.C[i]);
   if(vals.some(v=>v===null)){{showToast('Place all ten stones first','info');return;}}
-  G.moves++; document.getElementById('g-mvc').textContent=G.moves;
+  G.attempts++;
+  document.getElementById('g-att').textContent=G.attempts;
   try {{
     const data = await apiPost('/incairn/check', {{
       board_id:        G.board.board_id,
@@ -1190,75 +1259,31 @@ async function doCheck(){{
       session_token:   G.sessionToken
     }});
     if(data.correct){{
-      // Animate all cells green
-      document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));
-      let delay=0;
-      [[0,1,2],[1,3,4],[2,4,5],[3,6,7],[4,7,8],[5,8,9]].forEach(([p,l,r])=>{{
-        [p,l,r].forEach(idx=>{{
-          const el=document.querySelector('.cell[data-i="'+idx+'"]');
-          if(el)setTimeout(()=>el.classList.add('ok'),delay);
-          delay+=45;
-        }});
-      }});
-      G.solved=true; clearInterval(G.timerRef);
+      G.solved=true;
+      document.getElementById('revbtn').disabled=true;
+      document.getElementById('giveupbtn').style.display='none';
       setTimeout(()=>{{
         showToast('The cairn is complete ◈','win');
         launchConfetti(); saveProgress(); showWin();
-      }},delay+100);
+      }},120);
     }} else {{
-      // Fetch answer to highlight wrong cells
-      try {{
-        const ans = await apiGet('/incairn/answer', {{board_id:G.board.board_id}});
-        document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));
-        let delay=0;
-        [[0,1,2],[1,3,4],[2,4,5],[3,6,7],[4,7,8],[5,8,9]].forEach(([p,l,r])=>{{
-          const sol=ans.solution;
-          const good=(vals[p]===sol[p]&&vals[l]===sol[l]&&vals[r]===sol[r]);
-          [p,l,r].forEach(idx=>{{
-            const el=document.querySelector('.cell[data-i="'+idx+'"]');
-            if(el)setTimeout(()=>el.classList.add(vals[idx]===sol[idx]?'ok':'bad'),delay);
-            delay+=45;
-          }});
-        }});
-        setTimeout(()=>showToast('The pattern is not right — rearrange the stones','err'),delay+100);
-      }} catch(_) {{
-        showToast('The pattern is not right — rearrange the stones','err');
-      }}
+      showToast('Not quite — rearrange the stones','err');
     }}
   }} catch(e) {{
     showToast('Check failed: '+e.message,'err');
   }}
-}}
-function clrV(){{document.querySelectorAll('.cell').forEach(e=>e.classList.remove('ok','bad'));}}
-
-// ── Reveal answer button (optional convenience) ───────
-async function doReveal(){{
-  if(!G.board) return;
-  try {{
-    const ans = await apiGet('/incairn/answer', {{board_id:G.board.board_id}});
-    ans.solution.forEach((v,i)=>{{
-      G.C[i]=v;
-      // find the chip with that value and mark it used
-      const chip=Object.entries(G.CS).find(([id,cs])=>cs.v===v&&!cs.placed);
-      if(chip){{G.CS[chip[0]].placed=true;G.CID[i]=chip[0];
-               const c=document.getElementById(chip[0]);if(c)c.classList.add('used');}}
-    }});
-    renderCells(); updateProg();
-    showToast('Solution revealed','info');
-  }} catch(e) {{ showToast('Could not reveal: '+e.message,'err'); }}
 }}
 // ═══════════════════════════════════════════════════════
 // WIN
 // ═══════════════════════════════════════════════════════
 function showWin(){{
   setTimeout(()=>{{
-    const b=G.board, t=G.elapsed;
-    const m=Math.floor(t/60),s=t%60;
-    document.getElementById('w-time').textContent=m>0?m+'m '+s+'s':s+'s';
+    const b=G.board;
+    document.getElementById('w-att').textContent=
+      G.attempts+' attempt'+(G.attempts!==1?'s':'');
+    document.getElementById('w-rev').textContent=
+      G.revealsUsed+' reveal'+(G.revealsUsed!==1?'s':'');
     document.getElementById('w-bid').textContent=b.bid.toUpperCase();
-    const badge=document.getElementById('w-diff');
-    badge.textContent=b.diff; badge.className='badge '+b.diff.toLowerCase();
-    // Show the relationship string from the API response
     document.getElementById('w-rule').textContent='Parent = '+b.rel;
     const st=JSON.parse(localStorage.getItem('incairn_stats')||'{{}}');
     document.getElementById('w-streak').textContent=
@@ -1284,7 +1309,6 @@ function saveProgress(){{
   try{{
     const st=JSON.parse(localStorage.getItem('incairn_stats')||'{{}}');
     st.played=(st.played||0)+1;
-    if(!st.bestTime||G.elapsed<st.bestTime)st.bestTime=G.elapsed;
     const yest=new Date(Date.now()-86400000).toISOString().split('T')[0];
     const last=st.lastSolve||'';
     if(last===yest)st.streak=(st.streak||0)+1;
@@ -1292,8 +1316,14 @@ function saveProgress(){{
     st.lastSolve=TODAY_STR;
     localStorage.setItem('incairn_stats',JSON.stringify(st));
     const solves=JSON.parse(localStorage.getItem('incairn_solves')||'[]');
-    solves.push({{date:new Date().toISOString(),bid:G.board.bid,
-      difficulty:G.board.diff,time:G.elapsed,moves:G.moves,gen:G.board.gen}});
+    solves.push({{
+      date:     new Date().toISOString(),
+      bid:      G.board.bid,
+      difficulty: G.board.diff,
+      attempts: G.attempts,
+      reveals:  G.revealsUsed,
+      gen:      G.board.gen
+    }});
     if(solves.length>90)solves.splice(0,solves.length-90);
     localStorage.setItem('incairn_solves',JSON.stringify(solves));
   }}catch(e){{}}
@@ -1308,8 +1338,11 @@ function buildHistory(){{
     const slv=JSON.parse(localStorage.getItem('incairn_solves')||'[]');
     document.getElementById('hs-p').textContent=st.played||'—';
     document.getElementById('hs-s').textContent=st.streak||'—';
-    const b=st.bestTime||0,m=Math.floor(b/60),s=b%60;
-    document.getElementById('hs-b').textContent=b>0?(m>0?m+'m '+s+'s':s+'s'):'—';
+    const best=slv.length
+      ?Math.min(...slv.map(sv=>sv.attempts||Infinity).filter(v=>isFinite(v)))
+      :0;
+    document.getElementById('hs-b').textContent=
+      best>0?best+' attempt'+(best!==1?'s':''):'—';
     const solved=new Set(slv.map(s=>s.date.slice(0,10)));
     if(st.lastSolve===TODAY_STR)solved.add(TODAY_STR);
     const cal=document.getElementById('cal'); cal.innerHTML='';
@@ -1328,13 +1361,15 @@ function buildHistory(){{
       list.innerHTML='';
       [...slv].reverse().slice(0,20).forEach(sv=>{{
         const row=document.createElement('div');row.className='hist-row';
-        const t=sv.time||0,m=Math.floor(t/60),s=t%60;
         const dc=(sv.difficulty||'easy').toLowerCase();
+        const att=sv.attempts!=null?sv.attempts:'—';
+        const rev=sv.reveals!=null?sv.reveals:'—';
         row.innerHTML='<div><div class="hist-bid">'+(sv.bid||'—').toUpperCase()+
           '</div><div class="hist-date">'+new Date(sv.date).toLocaleDateString('en-GB',
           {{day:'numeric',month:'short',year:'numeric'}})+'</div></div>'+
-          '<div class="hist-meta"><span class="hist-time">'+(t>0?(m>0?m+'m '+s+'s':s+'s'):'—')+
-          '</span><span class="badge '+dc+'">'+(sv.difficulty||'—')+'</span></div>';
+          '<div class="hist-meta">'+
+          '<span class="hist-time">'+att+' att · '+rev+' rev</span>'+
+          '<span class="badge '+dc+'">'+(sv.difficulty||'—')+'</span></div>';
         list.appendChild(row);
       }});
     }}else{{list.innerHTML='<div class="hist-empty">No solves yet. Complete a cairn to begin.</div>';}}
@@ -1485,31 +1520,30 @@ function tE(e){{
     // ── Tray chip dropped onto a pyramid cell ──
     if(targetCell){{
       const ti=parseInt(targetCell.dataset.i);
+      if(G.lockedCells.has(ti)){{tCh=null;tSrc=null;return;}}
       if(G.C[ti]!==null)ret(ti);          // bump existing stone back to tray
       place(tSrc.id,G.CS[tSrc.id].v,ti,true);
-      clrV();
     }}
     // Drop back on tray or elsewhere → no-op (stays in tray)
   }}else{{
     // ── Cell stone dragged somewhere ──
     const srcIdx=tSrc.idx;
+    if(G.lockedCells.has(srcIdx)){{tCh=null;tSrc=null;return;}} // locked — can't move
     if(targetCell){{
       const ti=parseInt(targetCell.dataset.i);
-      if(ti!==srcIdx){{
-        // Swap the two cells (mirrors desktop ondrop cell→cell logic)
+      if(ti!==srcIdx&&!G.lockedCells.has(ti)){{
+        // Swap the two cells
         const tmpV=G.C[ti],tmpId=G.CID[ti];
         G.C[ti]=G.C[srcIdx];   G.CID[ti]=G.CID[srcIdx];
         G.C[srcIdx]=tmpV;       G.CID[srcIdx]=tmpId;
-        G.moves++;
-        document.getElementById('g-mvc').textContent=G.moves;
-        renderCells(); updateProg(); clrV();
+        renderCells(); updateProg();
       }}
     }}else if(onTray){{
       // Dropped back on the tray → return stone
-      ret(srcIdx); clrV();
+      ret(srcIdx);
     }}
     // Drop anywhere else → return stone to tray
-    else{{ret(srcIdx);clrV();}}
+    else{{ret(srcIdx);}}
   }}
 
   tCh=null;tSrc=null;
